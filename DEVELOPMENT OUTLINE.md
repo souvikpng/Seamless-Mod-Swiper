@@ -1,53 +1,71 @@
-Role: Build "Seamless Mod Swiper," a high-fidelity, desktop-only application (strictly forbidding Electron) that functions as a Tinder-style mod discovery tool.
+# Development Outline
 
-1. System Architecture & Data
+## System Architecture and Data
 
-Platform: Desktop application (No Electron).
+### Role 
+Build "Seamless Mod Swiper," a high-fidelity, desktop-only application (strictly forbidding Electron) that functions as a Tinder-style mod discovery tool.
 
-Tech Stack: Must make liberal use of Three.js shaders for premium visual effects.
+### Platform 
+Desktop application (No Electron).
 
-API: Nexus Mods GraphQL only (v2).
+### Tech Stack 
+Must make liberal use of Three.js shaders for premium visual effects.
 
-Auth: Stateless API key. User inputs key on every launch. Never store key.
+### API 
+Nexus Mods GraphQL only (v2).
 
-Persistence: Store only User Progress to ensure the same mod NEVER appears twice.
+### Auth 
+Stateless API key. User inputs key on every launch. Never store key.
 
-Output: Export approved list to clean .txt (Mod Name + Link). No installation/downloading functionality.
+### Persistence 
+Store only User Progress to ensure the same mod NEVER appears twice.
 
-2. Data Pipeline
+### Output 
+Export approved list to clean .txt (Mod Name + Link). No installation/downloading functionality.
 
-Fetching: Batch load 50+ mods/request to ensure smooth swiping.
+## Data Pipeline
 
-Visual Feedback: Trigger a cool intro animation whenever a new stack of mod cards is loaded.
+### Fetching 
+Batch load 50+ mods/request to ensure smooth swiping.
 
-Order: Completely random (ignore popularity, downloads, or endorsements).
+### Visual Feedback: Trigger a cool intro animation whenever a new stack of mod cards is loaded.
 
-Card Data Display: Title, Author, Thumbnail, Description Snippet, and Full Description.
+### Order 
+Completely random (ignore popularity, downloads, or endorsements, trending). If it helps, Nexus has a RANDOM endpoint available.
 
-Game Selection: Include a dropdown for Cyberpunk 2077, Red Dead Redemption 2, Fallout New Vegas, Baldur's Gate 3, and The Witcher 3. This selection determines which mods are fetched and strictly controls the UI theme.
+### Card Data 
+Display Title, Author, Thumbnail, Description Snippet, and Full Description (On Hover).
 
-3. UI/UX Requirements
+### Game Selection 
+Include a dropdown for Cyberpunk 2077, Red Dead Redemption 2, Fallout New Vegas, Baldur's Gate 3, and The Witcher 3. This selection determines which mods are fetched and strictly controls the UI theme.
 
-Landing Page: Must feature a "modern industrial retro" aesthetic with unique fonts and animations (avoid generic LLM designs).
+## UI/UX Requirements
 
-Elements: Title "Seamless Mod Swiper", nice-looking input for "Enter Nexus API", and a "Go!" button.
+### Landing Page 
+Must feature a "modern industrial retro" aesthetic with unique fonts and animations (avoid generic LLM designs).
 
-Interaction: Swipe Left (Reject), Swipe Right (Approve).
+### Elements 
+Title "Seamless Mod Swiper", nice-looking input for "Enter Nexus API", and a "Go!" button.
 
-Inputs: Mouse drag, UI Buttons, Keyboard shortcuts (A = left, D = right).
+### Interaction 
+Swipe Left (Reject), Swipe Right (Approve).
 
-Visuals: Display mods as large central cards. Show a small preview of the "next card" for orientation.
+### Inputs 
+Mouse drag, UI Buttons, Keyboard shortcuts (A = left, D = right).
 
-Settings Menu (Gear Icon):
+### Visuals 
+Display mods as large central cards. Show a small preview of the "next card" for orientation.
 
+### Settings Menu (Gear Icon)
 Reset Progress button (must have confirmation dialog).
 
-Theming Strategy:
+## Theming Strategy
 
-Core Directive: The UI must dynamically and non-negotiably replicate the in-game UI (aesthetic, animations, sound effects, visual styling) of the selected game to the absolute most accurate degree possible.
+### Core Directive 
+The UI must dynamically and non-negotiably replicate the in-game UI (aesthetic, animations, sound effects, visual styling) of the selected game to the absolute most accurate degree possible.
 
-Development Scope: Focus entirely on perfecting the Cyberpunk 2077 theme first. Other games can use placeholder aesthetics until explicitly prompted later.
+### Development Scope 
+Focus entirely on perfecting the Cyberpunk 2077 theme first. Other games can use placeholder aesthetics until explicitly prompted later.
 
-4. Performance
-
+### Performance
 Ensure smooth swiping, fast loading, and responsive design (no lag on batch fetch).
