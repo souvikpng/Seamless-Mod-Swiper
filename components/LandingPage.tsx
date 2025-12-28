@@ -17,7 +17,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onStart }) => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 relative z-10">
+    <div className="flex items-center justify-center p-4 relative z-10 -mt-20">
       <Panel className="w-full max-w-2xl p-10 bg-black/80 border-2 border-cp-yellow shadow-[0_0_50px_rgba(252,238,10,0.2)]">
         
         <div className="text-center mb-12 space-y-2">
