@@ -20,6 +20,18 @@ export interface FetchModsResponse {
 }
 
 /**
+ * Progress callback for bulk fetching
+ */
+export interface FetchProgress {
+  phase: 'pool' | 'fetching' | 'lists' | 'complete';
+  current: number;
+  total: number;
+  message: string;
+}
+
+export type ProgressCallback = (progress: FetchProgress) => void;
+
+/**
  * Parses rate limit headers from Nexus API response
  */
 const parseRateLimitHeaders = (response: Response): RateLimitInfo | null => {
@@ -30,9 +42,9 @@ const parseRateLimitHeaders = (response: Response): RateLimitInfo | null => {
 
   if (hourlyRemaining && dailyRemaining) {
     return {
-      hourlyLimit: parseInt(hourlyLimit || '50', 10),
+      hourlyLimit: parseInt(hourlyLimit || '100', 10),
       hourlyRemaining: parseInt(hourlyRemaining, 10),
-      dailyLimit: parseInt(dailyLimit || '500', 10),
+      dailyLimit: parseInt(dailyLimit || '2000', 10),
       dailyRemaining: parseInt(dailyRemaining, 10),
     };
   }
@@ -79,6 +91,11 @@ const shuffleArray = <T>(array: T[]): T[] => {
   }
   return shuffled;
 };
+
+/**
+ * Delay helper for rate limiting
+ */
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
  * Fetches the list of recently updated mod IDs
@@ -185,27 +202,24 @@ const fetchFromListEndpoint = async (
 };
 
 /**
- * Main function to fetch mods with true randomness
+ * Bulk fetch mods with progress reporting
  * 
- * Strategy:
- * 1. Get a large pool of mod IDs from the "updated in last month" endpoint (1 API call)
- * 2. Randomly select ~20 mod IDs from this pool
- * 3. Fetch individual mod details for each (20 API calls, done in batches)
- * 4. Filter out invalid mods
- * 5. Also fetch from trending/latest for baseline variety (2 API calls)
- * 
- * Total: ~23 API calls per fetch, but gets truly random mods
- * 
- * Alternative "lite" mode uses just the list endpoints for fewer API calls
+ * @param apiKey - Nexus API key
+ * @param game - Target game
+ * @param count - Number of mods to fetch (default 300)
+ * @param onProgress - Progress callback
+ * @param excludeIds - Set of mod IDs to skip (already cached/seen)
  */
-export const fetchMods = async (
+export const fetchModsBulk = async (
   apiKey: string,
   game: Game,
-  mode: 'random' | 'lite' = 'random'
+  count: number = 300,
+  onProgress?: ProgressCallback,
+  excludeIds: Set<number> = new Set()
 ): Promise<FetchModsResponse> => {
   if (!apiKey) {
     console.warn("No API Key provided, returning mocks for UI demo.");
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    await delay(1500);
     return {
       mods: MOCK_MODS.map(m => ({
         ...m,
@@ -219,52 +233,76 @@ export const fetchMods = async (
   try {
     let latestRateLimit: RateLimitInfo | null = null;
     const allMods: Mod[] = [];
-    const seenIds = new Set<number>();
+    const seenIds = new Set<number>(excludeIds);
 
-    if (mode === 'random') {
-      // RANDOM MODE: Get mod IDs from updated list, then fetch random ones individually
-      
-      // Step 1: Get the pool of recently updated mod IDs (1 API call)
-      console.log('Fetching mod ID pool...');
-      const { modIds, rateLimit: poolRateLimit } = await fetchUpdatedModIds(apiKey, game, '1m');
-      if (poolRateLimit) latestRateLimit = poolRateLimit;
-      
-      console.log(`Got ${modIds.length} mod IDs in pool`);
-      
-      // Step 2: Randomly select mod IDs to fetch (avoid already seen)
-      const shuffledIds = shuffleArray(modIds);
-      const idsToFetch = shuffledIds.slice(0, 15); // Fetch 15 random mods
-      
-      // Step 3: Fetch individual mod details in parallel (batched to avoid overwhelming)
-      console.log(`Fetching details for ${idsToFetch.length} random mods...`);
-      
-      // Batch into groups of 5 to be respectful of rate limits
-      for (let i = 0; i < idsToFetch.length; i += 5) {
-        const batch = idsToFetch.slice(i, i + 5);
-        const results = await Promise.all(
-          batch.map(id => fetchModDetails(apiKey, game, id))
-        );
-        
-        for (const result of results) {
-          if (result.rateLimit) latestRateLimit = result.rateLimit;
-          if (result.mod && isValidMod(result.mod) && !seenIds.has(result.mod.mod_id)) {
-            seenIds.add(result.mod.mod_id);
-            allMods.push(result.mod);
-          }
+    // Phase 1: Get mod ID pool from multiple time periods
+    onProgress?.({ phase: 'pool', current: 0, total: 3, message: 'Fetching mod ID pool...' });
+
+    const poolPromises = [
+      fetchUpdatedModIds(apiKey, game, '1m'),
+      fetchUpdatedModIds(apiKey, game, '1w'),
+      fetchUpdatedModIds(apiKey, game, '1d'),
+    ];
+
+    const poolResults = await Promise.all(poolPromises);
+    const allModIds = new Set<number>();
+    
+    for (const result of poolResults) {
+      if (result.rateLimit) latestRateLimit = result.rateLimit;
+      result.modIds.forEach(id => {
+        if (!seenIds.has(id)) {
+          allModIds.add(id);
         }
-      }
-      
-      console.log(`Got ${allMods.length} valid random mods`);
+      });
     }
 
-    // Also fetch from list endpoints for additional variety (both modes)
-    // These are "curated" lists that ensure we have some good content
-    const listEndpoints = mode === 'lite' 
-      ? ['trending', 'latest_added', 'latest_updated']
-      : ['trending', 'latest_added']; // In random mode, just add trending + latest for baseline
+    onProgress?.({ phase: 'pool', current: 3, total: 3, message: `Found ${allModIds.size} unique mod IDs` });
+
+    // Shuffle and pick the mods we want to fetch
+    const shuffledIds = shuffleArray(Array.from(allModIds));
+    const idsToFetch = shuffledIds.slice(0, count);
+
+    console.log(`Fetching details for ${idsToFetch.length} mods...`);
+
+    // Phase 2: Fetch individual mod details in batches
+    const batchSize = 10; // Concurrent requests per batch
+    const delayBetweenBatches = 100; // ms between batches to be nice to the API
     
-    console.log(`Fetching from list endpoints: ${listEndpoints.join(', ')}`);
-    
+    for (let i = 0; i < idsToFetch.length; i += batchSize) {
+      const batch = idsToFetch.slice(i, i + batchSize);
+      
+      onProgress?.({ 
+        phase: 'fetching', 
+        current: Math.min(i + batchSize, idsToFetch.length), 
+        total: idsToFetch.length, 
+        message: `Fetching mods ${i + 1}-${Math.min(i + batchSize, idsToFetch.length)} of ${idsToFetch.length}...` 
+      });
+
+      const results = await Promise.all(
+        batch.map(id => fetchModDetails(apiKey, game, id))
+      );
+
+      for (const result of results) {
+        if (result.rateLimit) latestRateLimit = result.rateLimit;
+        if (result.mod && isValidMod(result.mod) && !seenIds.has(result.mod.mod_id)) {
+          seenIds.add(result.mod.mod_id);
+          allMods.push(result.mod);
+        }
+      }
+
+      // Check rate limits and slow down if needed
+      if (latestRateLimit && latestRateLimit.hourlyRemaining < 50) {
+        console.warn('Rate limit getting low, slowing down...');
+        await delay(500);
+      } else if (i + batchSize < idsToFetch.length) {
+        await delay(delayBetweenBatches);
+      }
+    }
+
+    // Phase 3: Also fetch from list endpoints for variety
+    onProgress?.({ phase: 'lists', current: 0, total: 3, message: 'Fetching curated lists...' });
+
+    const listEndpoints = ['trending', 'latest_added', 'latest_updated'];
     const listResults = await Promise.all(
       listEndpoints.map(endpoint => fetchFromListEndpoint(apiKey, game, endpoint))
     );
@@ -279,7 +317,9 @@ export const fetchMods = async (
       }
     }
 
-    // Final shuffle for randomness
+    onProgress?.({ phase: 'complete', current: allMods.length, total: allMods.length, message: `Loaded ${allMods.length} mods` });
+
+    // Final shuffle
     const shuffledMods = shuffleArray(allMods);
     
     console.log(`Total: ${shuffledMods.length} unique valid mods fetched`);
@@ -295,6 +335,58 @@ export const fetchMods = async (
 };
 
 /**
+ * Quick fetch for small batches (original behavior)
+ * Used for quick refreshes when user needs more mods
+ */
+export const fetchMods = async (
+  apiKey: string,
+  game: Game,
+  mode: 'random' | 'lite' = 'random'
+): Promise<FetchModsResponse> => {
+  // Use bulk fetch with smaller count for "random" mode
+  if (mode === 'random') {
+    return fetchModsBulk(apiKey, game, 15);
+  }
+
+  // Lite mode: just fetch from list endpoints
+  if (!apiKey) {
+    await delay(1500);
+    return {
+      mods: MOCK_MODS.map(m => ({
+        ...m,
+        mod_id: m.mod_id + Math.floor(Math.random() * 10000),
+        domain_name: game,
+      })),
+      rateLimit: null,
+    };
+  }
+
+  const listEndpoints = ['trending', 'latest_added', 'latest_updated'];
+  const allMods: Mod[] = [];
+  const seenIds = new Set<number>();
+  let latestRateLimit: RateLimitInfo | null = null;
+
+  const results = await Promise.all(
+    listEndpoints.map(endpoint => fetchFromListEndpoint(apiKey, game, endpoint))
+  );
+
+  for (const result of results) {
+    if (result.rateLimit) latestRateLimit = result.rateLimit;
+    for (const mod of result.mods) {
+      if (!seenIds.has(mod.mod_id)) {
+        seenIds.add(mod.mod_id);
+        allMods.push(mod);
+      }
+    }
+  }
+
+  return {
+    mods: shuffleArray(allMods),
+    rateLimit: latestRateLimit,
+  };
+};
+
+/**
  * Validates an API key by making a lightweight request
  */
 export const validateApiKey = async (apiKey: string): Promise<boolean> => {
@@ -305,5 +397,26 @@ export const validateApiKey = async (apiKey: string): Promise<boolean> => {
     return response.ok;
   } catch {
     return false;
+  }
+};
+
+/**
+ * Gets user info including premium status
+ */
+export const getUserInfo = async (apiKey: string): Promise<{ isPremium: boolean; name: string } | null> => {
+  try {
+    const response = await fetch(`${NEXUS_API_BASE}/users/validate.json`, {
+      headers: getHeaders(apiKey),
+    });
+    
+    if (!response.ok) return null;
+    
+    const data = await response.json();
+    return {
+      isPremium: data.is_premium || false,
+      name: data.name || 'User',
+    };
+  } catch {
+    return null;
   }
 };

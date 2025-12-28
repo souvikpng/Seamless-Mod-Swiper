@@ -1,171 +1,360 @@
 import { Mod, Game } from '../types';
 
 /**
- * Cache entry structure for storing mods
+ * IndexedDB-based cache service for storing large amounts of mod data
+ * Supports 50MB+ storage vs localStorage's ~5MB limit
  */
-interface ModCacheEntry {
-  mods: Mod[];
-  timestamp: number;
-  game: Game;
-}
 
-// Cache TTL: 1 hour (in milliseconds)
-const CACHE_TTL_MS = 60 * 60 * 1000;
+const DB_NAME = 'SeamlessModSwiper';
+const DB_VERSION = 1;
+const MODS_STORE = 'mods';
+const META_STORE = 'meta';
 
-// localStorage key prefix
-const CACHE_KEY_PREFIX = 'sms_mod_cache_';
+// Cache TTL: 24 hours (mods don't change that often)
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
+let dbInstance: IDBDatabase | null = null;
 
 /**
- * Gets the cache key for a specific game
+ * Opens/creates the IndexedDB database
  */
-const getCacheKey = (game: Game): string => {
-  return `${CACHE_KEY_PREFIX}${game}`;
-};
-
-/**
- * Checks if a cache entry is still valid (not expired)
- */
-const isCacheValid = (entry: ModCacheEntry): boolean => {
-  const now = Date.now();
-  return now - entry.timestamp < CACHE_TTL_MS;
-};
-
-/**
- * Retrieves cached mods for a game if available and not expired
- * @param game The game to get cached mods for
- * @returns Cached mods array or null if no valid cache exists
- */
-export const getCachedMods = (game: Game): Mod[] | null => {
-  try {
-    const cacheKey = getCacheKey(game);
-    const cached = localStorage.getItem(cacheKey);
-    
-    if (!cached) {
-      return null;
-    }
-    
-    const entry: ModCacheEntry = JSON.parse(cached);
-    
-    if (!isCacheValid(entry)) {
-      // Cache expired, remove it
-      localStorage.removeItem(cacheKey);
-      console.log(`Cache expired for ${game}, removed`);
-      return null;
-    }
-    
-    console.log(`Cache hit for ${game}: ${entry.mods.length} mods (age: ${Math.round((Date.now() - entry.timestamp) / 1000 / 60)}min)`);
-    return entry.mods;
-  } catch (e) {
-    console.error('Failed to read mod cache:', e);
-    return null;
+const openDB = (): Promise<IDBDatabase> => {
+  if (dbInstance) {
+    return Promise.resolve(dbInstance);
   }
-};
 
-/**
- * Stores mods in the cache for a specific game
- * @param game The game to cache mods for
- * @param mods The mods to cache
- */
-export const setCachedMods = (game: Game, mods: Mod[]): void => {
-  try {
-    const cacheKey = getCacheKey(game);
-    const entry: ModCacheEntry = {
-      mods,
-      timestamp: Date.now(),
-      game,
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+
+    request.onerror = () => {
+      console.error('Failed to open IndexedDB:', request.error);
+      reject(request.error);
     };
-    
-    localStorage.setItem(cacheKey, JSON.stringify(entry));
-    console.log(`Cached ${mods.length} mods for ${game}`);
-  } catch (e) {
-    console.error('Failed to write mod cache:', e);
-    // If localStorage is full, try to clear old caches
-    if (e instanceof DOMException && e.name === 'QuotaExceededError') {
-      clearAllModCaches();
+
+    request.onsuccess = () => {
+      dbInstance = request.result;
+      resolve(dbInstance);
+    };
+
+    request.onupgradeneeded = (event) => {
+      const db = (event.target as IDBOpenDBRequest).result;
+
+      // Store for individual mods (keyed by game_modId)
+      if (!db.objectStoreNames.contains(MODS_STORE)) {
+        const modsStore = db.createObjectStore(MODS_STORE, { keyPath: 'cacheKey' });
+        modsStore.createIndex('game', 'game', { unique: false });
+        modsStore.createIndex('mod_id', 'mod_id', { unique: false });
+      }
+
+      // Store for metadata (cache timestamps, etc.)
+      if (!db.objectStoreNames.contains(META_STORE)) {
+        db.createObjectStore(META_STORE, { keyPath: 'key' });
+      }
+    };
+  });
+};
+
+/**
+ * Generates a cache key for a mod
+ */
+const getModCacheKey = (game: Game, modId: number): string => {
+  return `${game}_${modId}`;
+};
+
+/**
+ * Stores multiple mods in the cache (batch operation)
+ */
+export const setCachedMods = async (game: Game, mods: Mod[]): Promise<void> => {
+  try {
+    const db = await openDB();
+    const tx = db.transaction([MODS_STORE, META_STORE], 'readwrite');
+    const modsStore = tx.objectStore(MODS_STORE);
+    const metaStore = tx.objectStore(META_STORE);
+
+    // Store each mod
+    for (const mod of mods) {
+      const cacheKey = getModCacheKey(game, mod.mod_id);
+      modsStore.put({
+        cacheKey,
+        game,
+        mod_id: mod.mod_id,
+        data: mod,
+        timestamp: Date.now(),
+      });
     }
+
+    // Update metadata
+    metaStore.put({
+      key: `lastUpdate_${game}`,
+      timestamp: Date.now(),
+      modCount: mods.length,
+    });
+
+    return new Promise((resolve, reject) => {
+      tx.oncomplete = () => {
+        console.log(`Cached ${mods.length} mods for ${game}`);
+        resolve();
+      };
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (e) {
+    console.error('Failed to cache mods:', e);
   }
 };
 
 /**
- * Adds new mods to an existing cache (merges and deduplicates)
- * @param game The game to update cache for
- * @param newMods New mods to add to the cache
+ * Appends new mods to the cache (deduplicates automatically via key)
  */
-export const appendToCachedMods = (game: Game, newMods: Mod[]): void => {
-  const existingMods = getCachedMods(game) || [];
-  
-  // Merge and deduplicate by mod_id
-  const seenIds = new Set(existingMods.map(m => m.mod_id));
-  const uniqueNewMods = newMods.filter(m => !seenIds.has(m.mod_id));
-  
-  const mergedMods = [...existingMods, ...uniqueNewMods];
-  setCachedMods(game, mergedMods);
-  
-  console.log(`Appended ${uniqueNewMods.length} new mods to cache (total: ${mergedMods.length})`);
+export const appendToCachedMods = async (game: Game, newMods: Mod[]): Promise<number> => {
+  try {
+    const db = await openDB();
+    const tx = db.transaction(MODS_STORE, 'readwrite');
+    const store = tx.objectStore(MODS_STORE);
+
+    let addedCount = 0;
+
+    for (const mod of newMods) {
+      const cacheKey = getModCacheKey(game, mod.mod_id);
+      
+      // Check if already exists
+      const existing = await new Promise<any>((resolve) => {
+        const req = store.get(cacheKey);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => resolve(null);
+      });
+
+      if (!existing) {
+        store.put({
+          cacheKey,
+          game,
+          mod_id: mod.mod_id,
+          data: mod,
+          timestamp: Date.now(),
+        });
+        addedCount++;
+      }
+    }
+
+    return new Promise((resolve, reject) => {
+      tx.oncomplete = () => {
+        console.log(`Appended ${addedCount} new mods to cache`);
+        resolve(addedCount);
+      };
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (e) {
+    console.error('Failed to append mods to cache:', e);
+    return 0;
+  }
+};
+
+/**
+ * Gets all cached mods for a game
+ */
+export const getCachedMods = async (game: Game): Promise<Mod[]> => {
+  try {
+    const db = await openDB();
+    const tx = db.transaction(MODS_STORE, 'readonly');
+    const store = tx.objectStore(MODS_STORE);
+    const index = store.index('game');
+
+    return new Promise((resolve, reject) => {
+      const request = index.getAll(game);
+      request.onsuccess = () => {
+        const entries = request.result || [];
+        const mods = entries.map((e: any) => e.data as Mod);
+        console.log(`Cache hit for ${game}: ${mods.length} mods`);
+        resolve(mods);
+      };
+      request.onerror = () => reject(request.error);
+    });
+  } catch (e) {
+    console.error('Failed to get cached mods:', e);
+    return [];
+  }
+};
+
+/**
+ * Gets the count of cached mods for a game
+ */
+export const getCachedModCount = async (game: Game): Promise<number> => {
+  try {
+    const db = await openDB();
+    const tx = db.transaction(MODS_STORE, 'readonly');
+    const store = tx.objectStore(MODS_STORE);
+    const index = store.index('game');
+
+    return new Promise((resolve, reject) => {
+      const request = index.count(game);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+  } catch (e) {
+    console.error('Failed to get cached mod count:', e);
+    return 0;
+  }
 };
 
 /**
  * Clears the mod cache for a specific game
- * @param game The game to clear cache for
  */
-export const clearModCache = (game: Game): void => {
-  const cacheKey = getCacheKey(game);
-  localStorage.removeItem(cacheKey);
-  console.log(`Cleared mod cache for ${game}`);
+export const clearModCache = async (game: Game): Promise<void> => {
+  try {
+    const db = await openDB();
+    const tx = db.transaction([MODS_STORE, META_STORE], 'readwrite');
+    const modsStore = tx.objectStore(MODS_STORE);
+    const metaStore = tx.objectStore(META_STORE);
+    const index = modsStore.index('game');
+
+    // Get all keys for this game and delete them
+    const keysRequest = index.getAllKeys(game);
+    
+    return new Promise((resolve, reject) => {
+      keysRequest.onsuccess = () => {
+        const keys = keysRequest.result;
+        keys.forEach(key => modsStore.delete(key));
+        metaStore.delete(`lastUpdate_${game}`);
+        
+        tx.oncomplete = () => {
+          console.log(`Cleared ${keys.length} mods from cache for ${game}`);
+          resolve();
+        };
+        tx.onerror = () => reject(tx.error);
+      };
+      keysRequest.onerror = () => reject(keysRequest.error);
+    });
+  } catch (e) {
+    console.error('Failed to clear mod cache:', e);
+  }
 };
 
 /**
  * Clears all mod caches
  */
-export const clearAllModCaches = (): void => {
-  const keys = Object.keys(localStorage);
-  keys.forEach(key => {
-    if (key.startsWith(CACHE_KEY_PREFIX)) {
-      localStorage.removeItem(key);
-    }
-  });
-  console.log('Cleared all mod caches');
+export const clearAllModCaches = async (): Promise<void> => {
+  try {
+    const db = await openDB();
+    const tx = db.transaction([MODS_STORE, META_STORE], 'readwrite');
+    tx.objectStore(MODS_STORE).clear();
+    tx.objectStore(META_STORE).clear();
+
+    return new Promise((resolve, reject) => {
+      tx.oncomplete = () => {
+        console.log('Cleared all mod caches');
+        resolve();
+      };
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (e) {
+    console.error('Failed to clear all caches:', e);
+  }
 };
 
 /**
  * Gets cache age in minutes for a specific game
- * @param game The game to check cache age for
- * @returns Age in minutes, or null if no cache exists
  */
-export const getCacheAge = (game: Game): number | null => {
+export const getCacheAge = async (game: Game): Promise<number | null> => {
   try {
-    const cacheKey = getCacheKey(game);
-    const cached = localStorage.getItem(cacheKey);
-    
-    if (!cached) {
-      return null;
-    }
-    
-    const entry: ModCacheEntry = JSON.parse(cached);
-    return Math.round((Date.now() - entry.timestamp) / 1000 / 60);
-  } catch {
+    const db = await openDB();
+    const tx = db.transaction(META_STORE, 'readonly');
+    const store = tx.objectStore(META_STORE);
+
+    return new Promise((resolve) => {
+      const request = store.get(`lastUpdate_${game}`);
+      request.onsuccess = () => {
+        if (request.result) {
+          const age = Math.round((Date.now() - request.result.timestamp) / 1000 / 60);
+          resolve(age);
+        } else {
+          resolve(null);
+        }
+      };
+      request.onerror = () => resolve(null);
+    });
+  } catch (e) {
     return null;
   }
 };
 
 /**
  * Filters out already-seen mods from a list
- * @param mods The mods to filter
- * @param seenIds Set of mod IDs that have been seen
- * @returns Filtered list of unseen mods
  */
 export const filterUnseenMods = (mods: Mod[], seenIds: Set<number>): Mod[] => {
   return mods.filter(m => !seenIds.has(m.mod_id));
 };
 
 /**
- * Gets the count of unseen mods in cache for a specific game
- * @param game The game to check
- * @param seenIds Set of mod IDs that have been seen
- * @returns Count of unseen mods, or 0 if no cache
+ * Gets unseen mods from cache for a specific game
  */
-export const getUnseenCachedModCount = (game: Game, seenIds: Set<number>): number => {
-  const cached = getCachedMods(game);
-  if (!cached) return 0;
-  return filterUnseenMods(cached, seenIds).length;
+export const getUnseenCachedMods = async (game: Game, seenIds: Set<number>): Promise<Mod[]> => {
+  const cached = await getCachedMods(game);
+  return filterUnseenMods(cached, seenIds);
+};
+
+/**
+ * Gets the count of unseen mods in cache
+ */
+export const getUnseenCachedModCount = async (game: Game, seenIds: Set<number>): Promise<number> => {
+  const unseen = await getUnseenCachedMods(game, seenIds);
+  return unseen.length;
+};
+
+/**
+ * Checks if cache needs refresh (old or low on unseen mods)
+ */
+export const shouldRefreshCache = async (
+  game: Game, 
+  seenIds: Set<number>,
+  lowThreshold: number = 20
+): Promise<boolean> => {
+  const age = await getCacheAge(game);
+  
+  // Refresh if cache is older than TTL
+  if (age !== null && age > CACHE_TTL_MS / 1000 / 60) {
+    return true;
+  }
+
+  // Refresh if running low on unseen mods
+  const unseenCount = await getUnseenCachedModCount(game, seenIds);
+  if (unseenCount < lowThreshold) {
+    return true;
+  }
+
+  return false;
+};
+
+// Legacy sync functions for backwards compatibility during migration
+// These will be gradually replaced with async versions
+
+/**
+ * @deprecated Use async getCachedMods instead
+ */
+export const getCachedModsSync = (game: Game): Mod[] | null => {
+  // Try localStorage fallback for backwards compatibility
+  try {
+    const cached = localStorage.getItem(`sms_mod_cache_${game}`);
+    if (cached) {
+      const entry = JSON.parse(cached);
+      return entry.mods || null;
+    }
+  } catch (e) {
+    // Ignore
+  }
+  return null;
+};
+
+/**
+ * @deprecated Use async getCacheAge instead  
+ */
+export const getCacheAgeSync = (game: Game): number | null => {
+  try {
+    const cached = localStorage.getItem(`sms_mod_cache_${game}`);
+    if (cached) {
+      const entry = JSON.parse(cached);
+      return Math.round((Date.now() - entry.timestamp) / 1000 / 60);
+    }
+  } catch (e) {
+    // Ignore
+  }
+  return null;
 };

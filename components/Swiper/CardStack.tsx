@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import { Mod } from '../../types';
 import ModCard from './ModCard';
-import { CyberButton, GlitchText } from '../UI/CyberComponents';
+import { GlitchText } from '../UI/CyberComponents';
 import { XCircle, CheckCircle } from 'lucide-react';
 
 interface CardStackProps {
@@ -103,12 +103,9 @@ const CardStack: React.FC<CardStackProps> = ({ mods, onApprove, onReject, isLoad
       <div className="flex flex-col items-center justify-center text-center max-w-md mx-auto p-8 bg-cp-dark/80 border border-cp-gray backdrop-blur-md cp-clip-box">
         <div className="text-6xl mb-4">🏁</div>
         <h2 className="text-3xl font-bold text-white mb-2 font-sans uppercase">Queue Depleted</h2>
-        <p className="text-cp-cyan font-mono mb-8">You have swiped through the current batch.</p>
-        <CyberButton 
-          label="Load More Mods" 
-          onClick={() => { setCurrentIndex(0); onRefresh(true); }} 
-        />
-        <p className="text-[10px] text-gray-600 mt-4 font-mono">Fetches random mods from Nexus</p>
+        <p className="text-cp-cyan font-mono mb-4">You have swiped through the current batch.</p>
+        <p className="text-gray-500 font-mono text-sm animate-pulse">Loading more mods automatically...</p>
+        <p className="text-[10px] text-gray-600 mt-4 font-mono">Or use the refresh button in the header</p>
       </div>
     );
   }
