@@ -244,16 +244,20 @@ export const fetchModsBulk = async (
       fetchUpdatedModIds(apiKey, game, '1d'),
     ];
 
-    const poolResults = await Promise.all(poolPromises);
+    const poolResults = await Promise.allSettled(poolPromises);
     const allModIds = new Set<number>();
     
     for (const result of poolResults) {
-      if (result.rateLimit) latestRateLimit = result.rateLimit;
-      result.modIds.forEach(id => {
-        if (!seenIds.has(id)) {
-          allModIds.add(id);
-        }
-      });
+      if (result.status === 'fulfilled') {
+        if (result.value.rateLimit) latestRateLimit = result.value.rateLimit;
+        result.value.modIds.forEach(id => {
+          if (!seenIds.has(id)) {
+            allModIds.add(id);
+          }
+        });
+      } else {
+        console.warn('Failed to fetch updated mod IDs for one period:', result.reason);
+      }
     }
 
     onProgress?.({ phase: 'pool', current: 3, total: 3, message: `Found ${allModIds.size} unique mod IDs` });
@@ -401,7 +405,12 @@ export const validateApiKey = async (apiKey: string): Promise<boolean> => {
 };
 
 /**
- * Gets user info including premium status
+ * Gets user info including premium status.
+ * Exported for use by external callers - can be used to display user info
+ * in the UI or adjust behavior based on premium status (e.g., rate limits).
+ * 
+ * @param apiKey - Nexus Mods API key
+ * @returns User info object with isPremium and name, or null if request fails
  */
 export const getUserInfo = async (apiKey: string): Promise<{ isPremium: boolean; name: string } | null> => {
   try {

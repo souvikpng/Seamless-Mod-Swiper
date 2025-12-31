@@ -16,11 +16,37 @@ const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 let dbInstance: IDBDatabase | null = null;
 
 /**
+ * Checks if a database connection is still valid and open
+ */
+const isDbOpen = (db: IDBDatabase | null): boolean => {
+  if (!db) return false;
+  try {
+    // Attempt to access objectStoreNames - throws if db is closed
+    return db.objectStoreNames.length >= 0;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Clears the database instance reference
+ */
+const clearDbInstance = () => {
+  dbInstance = null;
+};
+
+/**
  * Opens/creates the IndexedDB database
  */
 const openDB = (): Promise<IDBDatabase> => {
-  if (dbInstance) {
+  // Validate existing connection is still open
+  if (dbInstance && isDbOpen(dbInstance)) {
     return Promise.resolve(dbInstance);
+  }
+  
+  // Clear stale reference if connection is closed
+  if (dbInstance) {
+    clearDbInstance();
   }
 
   return new Promise((resolve, reject) => {
@@ -28,12 +54,38 @@ const openDB = (): Promise<IDBDatabase> => {
 
     request.onerror = () => {
       console.error('Failed to open IndexedDB:', request.error);
+      clearDbInstance();
       reject(request.error);
     };
 
+    request.onblocked = () => {
+      console.warn('IndexedDB open blocked - another connection is open');
+      clearDbInstance();
+      reject(new Error('Database blocked'));
+    };
+
     request.onsuccess = () => {
-      dbInstance = request.result;
-      resolve(dbInstance);
+      const db = request.result;
+      
+      // Attach handlers to detect when connection closes or errors
+      db.onclose = () => {
+        console.log('IndexedDB connection closed');
+        clearDbInstance();
+      };
+      
+      db.onerror = (event) => {
+        console.error('IndexedDB error:', event);
+        clearDbInstance();
+      };
+      
+      db.onversionchange = () => {
+        // Another tab wants to upgrade - close this connection
+        db.close();
+        clearDbInstance();
+      };
+      
+      dbInstance = db;
+      resolve(db);
     };
 
     request.onupgradeneeded = (event) => {
@@ -108,39 +160,48 @@ export const setCachedMods = async (game: Game, mods: Mod[]): Promise<void> => {
 export const appendToCachedMods = async (game: Game, newMods: Mod[]): Promise<number> => {
   try {
     const db = await openDB();
-    const tx = db.transaction(MODS_STORE, 'readwrite');
-    const store = tx.objectStore(MODS_STORE);
+    
+    // First, get all existing cache keys for this game in a separate transaction
+    const existingKeys = await new Promise<Set<string>>((resolve, reject) => {
+      const readTx = db.transaction(MODS_STORE, 'readonly');
+      const store = readTx.objectStore(MODS_STORE);
+      const index = store.index('game');
+      const request = index.getAllKeys(game);
+      
+      request.onsuccess = () => {
+        resolve(new Set(request.result.map(k => String(k))));
+      };
+      request.onerror = () => reject(request.error);
+    });
 
+    // Now open write transaction and synchronously put new mods (no awaits)
+    const writeTx = db.transaction(MODS_STORE, 'readwrite');
+    const writeStore = writeTx.objectStore(MODS_STORE);
+    
     let addedCount = 0;
+    const timestamp = Date.now();
 
     for (const mod of newMods) {
       const cacheKey = getModCacheKey(game, mod.mod_id);
       
-      // Check if already exists
-      const existing = await new Promise<any>((resolve) => {
-        const req = store.get(cacheKey);
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => resolve(null);
-      });
-
-      if (!existing) {
-        store.put({
+      if (!existingKeys.has(cacheKey)) {
+        writeStore.put({
           cacheKey,
           game,
           mod_id: mod.mod_id,
           data: mod,
-          timestamp: Date.now(),
+          timestamp,
         });
         addedCount++;
       }
     }
 
     return new Promise((resolve, reject) => {
-      tx.oncomplete = () => {
+      writeTx.oncomplete = () => {
         console.log(`Appended ${addedCount} new mods to cache`);
         resolve(addedCount);
       };
-      tx.onerror = () => reject(tx.error);
+      writeTx.onerror = () => reject(writeTx.error);
     });
   } catch (e) {
     console.error('Failed to append mods to cache:', e);

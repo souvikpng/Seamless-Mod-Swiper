@@ -12,23 +12,23 @@ interface CardStackProps {
   isLoading: boolean;
   onRefresh: (forceRefresh?: boolean) => void;
   onQueueChange?: (remaining: number) => void;
+  currentIndex: number;
+  onIndexChange: (index: number) => void;
 }
 
-const CardStack: React.FC<CardStackProps> = ({ mods, onApprove, onReject, isLoading, onRefresh, onQueueChange }) => {
-  const [currentIndex, setCurrentIndex] = useState(0);
+const CardStack: React.FC<CardStackProps> = ({ mods, onApprove, onReject, isLoading, onRefresh, onQueueChange, currentIndex, onIndexChange }) => {
   const [isAnimating, setIsAnimating] = useState(false);
   const [exitDirection, setExitDirection] = useState<'left' | 'right' | null>(null);
   
   // Ref to prevent double-swipes
   const swipeInProgress = useRef(false);
-
-  // Reset index when mods change (new batch loaded)
+  
+  // Reset animation state when component mounts (view switch)
   useEffect(() => {
-    setCurrentIndex(0);
     setIsAnimating(false);
     setExitDirection(null);
     swipeInProgress.current = false;
-  }, [mods]);
+  }, []);
 
   // Report queue changes
   useEffect(() => {
@@ -76,11 +76,11 @@ const CardStack: React.FC<CardStackProps> = ({ mods, onApprove, onReject, isLoad
       onApprove(currentMod);
     }
     
-    setCurrentIndex(prev => prev + 1);
+    onIndexChange(currentIndex + 1);
     setIsAnimating(false);
     setExitDirection(null);
     swipeInProgress.current = false;
-  }, [currentIndex, mods, onReject, onApprove]);
+  }, [currentIndex, mods, onReject, onApprove, onIndexChange]);
 
   // Handle swipe from drag gesture (animation already handled in ModCard)
   const handleSwipe = useCallback((direction: 'left' | 'right') => {

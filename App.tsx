@@ -40,10 +40,12 @@ const App: React.FC = () => {
   const [queueRemaining, setQueueRemaining] = useState(0);
   const [cachedCount, setCachedCount] = useState(0);
   const [cacheAge, setCacheAge] = useState<number | null>(null);
+  const [currentModIndex, setCurrentModIndex] = useState(0);
   
   const settingsRef = useRef<HTMLDivElement>(null);
   const lastAutoRefresh = useRef<number>(0);
   const isAutoRefreshing = useRef<boolean>(false);
+  const seenModIdsRef = useRef<Set<number>>(seenModIds);
 
   // Initialization: Load persistence from localStorage
   useEffect(() => {
@@ -66,8 +68,9 @@ const App: React.FC = () => {
     }
   }, []);
 
-  // Save seenModIds to localStorage on change
+  // Save seenModIds to localStorage on change and keep ref in sync
   useEffect(() => {
+    seenModIdsRef.current = seenModIds;
     localStorage.setItem('seenModIds', JSON.stringify(Array.from(seenModIds)));
   }, [seenModIds]);
 
@@ -133,8 +136,8 @@ const App: React.FC = () => {
       lastAutoRefresh.current = now;
 
       try {
-        // Try to load from cache first
-        const unseenFromCache = await getUnseenCachedMods(selectedGame, seenModIds);
+        // Try to load from cache first (use ref for current value)
+        const unseenFromCache = await getUnseenCachedMods(selectedGame, seenModIdsRef.current);
         
         if (unseenFromCache.length >= LOW_QUEUE_THRESHOLD) {
           // We have enough in cache, just load more into the queue
@@ -153,7 +156,7 @@ const App: React.FC = () => {
     };
 
     checkAndAutoRefresh();
-  }, [queueRemaining, apiKey, view, isLoading, isBulkLoading, selectedGame, seenModIds]);
+  }, [queueRemaining, apiKey, view, isLoading, isBulkLoading, selectedGame, seenModIds.size]);
 
   /**
    * Bulk load mods with progress indicator
@@ -170,14 +173,16 @@ const App: React.FC = () => {
     setError(null);
     
     try {
-      // First, check if we have unseen mods in cache
+      // First, check if we have unseen mods in cache (use ref for current value)
+      const currentSeenIds = seenModIdsRef.current;
       const cachedMods = await getCachedMods(game);
-      const unseenCached = filterUnseenMods(cachedMods, seenModIds);
+      const unseenCached = filterUnseenMods(cachedMods, currentSeenIds);
       
       if (unseenCached.length >= BULK_FETCH_COUNT / 2 && !isBackground) {
         // Use cache if we have a good amount
         console.log(`Using ${unseenCached.length} unseen mods from cache`);
         setMods(unseenCached);
+        setCurrentModIndex(0); // Reset to start for new batch
         setIsLoading(false);
         setIsBulkLoading(false);
         return;
@@ -185,7 +190,7 @@ const App: React.FC = () => {
 
       // Fetch bulk mods with progress
       const alreadyCachedIds = new Set(cachedMods.map(m => m.mod_id));
-      const excludeIds = new Set([...seenModIds, ...alreadyCachedIds]);
+      const excludeIds = new Set([...currentSeenIds, ...alreadyCachedIds]);
 
       const response = await fetchModsBulk(
         key, 
@@ -206,7 +211,7 @@ const App: React.FC = () => {
       }
 
       // Filter and set mods for display
-      const unseenMods = filterUnseenMods(response.mods, seenModIds);
+      const unseenMods = filterUnseenMods(response.mods, currentSeenIds);
       
       if (!isBackground) {
         // Also include unseen from cache
@@ -215,6 +220,7 @@ const App: React.FC = () => {
           new Map(allUnseen.map(m => [m.mod_id, m])).values()
         );
         setMods(uniqueUnseen);
+        setCurrentModIndex(0); // Reset to start for new batch
       } else {
         // Background refresh: append to existing queue
         setMods(prev => {
@@ -242,7 +248,7 @@ const App: React.FC = () => {
       setIsBulkLoading(false);
       setLoadProgress(null);
     }
-  }, [seenModIds]);
+  }, []);
 
   const handleStart = (key: string, game: Game) => {
     setApiKey(key);
@@ -279,21 +285,27 @@ const App: React.FC = () => {
   };
 
   const handleResetProgress = async () => {
-    // Clear all progress
-    setSeenModIds(new Set());
-    setApprovedMods([]);
-    setMods([]);
-    await clearModCache(selectedGame);
-    localStorage.removeItem('seenModIds');
-    localStorage.removeItem('approvedMods');
-    setShowResetConfirm(false);
-    setShowSettings(false);
-    setError(null);
-    setCachedCount(0);
-    setCacheAge(null);
-    // Reload mods
-    if (apiKey) {
-      loadModsBulk(apiKey, selectedGame);
+    try {
+      await clearModCache(selectedGame);
+    } catch (err) {
+      console.error('Failed to clear mod cache:', err);
+      setError(err instanceof Error ? err.message : 'Failed to clear cache');
+    } finally {
+      // Always perform cleanup even if cache clear fails
+      setSeenModIds(new Set());
+      setApprovedMods([]);
+      setMods([]);
+      setCurrentModIndex(0);
+      localStorage.removeItem('seenModIds');
+      localStorage.removeItem('approvedMods');
+      setShowResetConfirm(false);
+      setShowSettings(false);
+      setCachedCount(0);
+      setCacheAge(null);
+      // Reload mods
+      if (apiKey) {
+        loadModsBulk(apiKey, selectedGame);
+      }
     }
   };
 
@@ -332,6 +344,7 @@ const App: React.FC = () => {
           <div className="pointer-events-auto flex gap-2">
             {/* Refresh Button */}
             <button 
+              type="button"
               onClick={() => apiKey && loadModsBulk(apiKey, selectedGame, false)}
               disabled={isBulkLoading}
               className={`bg-black/50 border p-2 transition-colors ${
@@ -423,12 +436,12 @@ const App: React.FC = () => {
                      {loadProgress.phase === 'complete' && 'Complete!'}
                    </span>
                  </div>
-                 <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
-                   <div 
-                     className="h-full bg-cp-cyan transition-all duration-300"
-                     style={{ width: `${(loadProgress.current / loadProgress.total) * 100}%` }}
-                   />
-                 </div>
+<div className="h-2 bg-gray-800 rounded-full overflow-hidden">
+                    <div 
+                      className="h-full bg-cp-cyan transition-all duration-300"
+                      style={{ width: `${loadProgress.total > 0 ? Math.min((loadProgress.current / loadProgress.total) * 100, 100) : 0}%` }}
+                    />
+                  </div>
                  <p className="text-[10px] text-gray-500 font-mono mt-2">
                    {loadProgress.message}
                  </p>
@@ -441,14 +454,16 @@ const App: React.FC = () => {
                </div>
              )}
              
-             <CardStack 
-               mods={mods} 
-               onApprove={handleApprove} 
-               onReject={handleReject} 
-               isLoading={isLoading && !isBulkLoading}
-               onRefresh={(forceRefresh) => apiKey && loadModsBulk(apiKey, selectedGame, !forceRefresh)}
-               onQueueChange={setQueueRemaining}
-             />
+<CardStack 
+                mods={mods} 
+                onApprove={handleApprove} 
+                onReject={handleReject} 
+                isLoading={isLoading && !isBulkLoading}
+                onRefresh={(forceRefresh) => apiKey && loadModsBulk(apiKey, selectedGame, !forceRefresh)}
+                onQueueChange={setQueueRemaining}
+                currentIndex={currentModIndex}
+                onIndexChange={setCurrentModIndex}
+              />
              
              {/* Controls info - positioned at bottom with no overlap */}
              <div className="mt-4 text-center text-[10px] text-gray-600 font-mono">
