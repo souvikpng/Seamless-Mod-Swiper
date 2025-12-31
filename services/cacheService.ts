@@ -139,7 +139,6 @@ export const setCachedMods = async (game: Game, mods: Mod[]): Promise<void> => {
     metaStore.put({
       key: `lastUpdate_${game}`,
       timestamp: Date.now(),
-      modCount: mods.length,
     });
 
     return new Promise((resolve, reject) => {
@@ -361,7 +360,13 @@ export const getUnseenCachedModCount = async (game: Game, seenIds: Set<number>):
 };
 
 /**
- * Checks if cache needs refresh (old or low on unseen mods)
+ * Checks if cache needs refresh (old or low on unseen mods).
+ * Exported for potential use in smarter auto-refresh logic or by external consumers.
+ * 
+ * @param game - The game to check cache for
+ * @param seenIds - Set of mod IDs the user has already seen
+ * @param lowThreshold - Minimum unseen mods before refresh is recommended (default 20)
+ * @returns true if cache should be refreshed
  */
 export const shouldRefreshCache = async (
   game: Game, 

@@ -307,11 +307,16 @@ export const fetchModsBulk = async (
     onProgress?.({ phase: 'lists', current: 0, total: 3, message: 'Fetching curated lists...' });
 
     const listEndpoints = ['trending', 'latest_added', 'latest_updated'];
-    const listResults = await Promise.all(
+    const listSettled = await Promise.allSettled(
       listEndpoints.map(endpoint => fetchFromListEndpoint(apiKey, game, endpoint))
     );
 
-    for (const result of listResults) {
+    for (const settled of listSettled) {
+      if (settled.status === 'rejected') {
+        console.warn('Failed to fetch list endpoint:', settled.reason);
+        continue;
+      }
+      const result = settled.value;
       if (result.rateLimit) latestRateLimit = result.rateLimit;
       for (const mod of result.mods) {
         if (!seenIds.has(mod.mod_id)) {

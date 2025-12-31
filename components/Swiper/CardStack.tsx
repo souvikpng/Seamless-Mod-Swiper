@@ -10,13 +10,12 @@ interface CardStackProps {
   onApprove: (mod: Mod) => void;
   onReject: (mod: Mod) => void;
   isLoading: boolean;
-  onRefresh: (forceRefresh?: boolean) => void;
   onQueueChange?: (remaining: number) => void;
   currentIndex: number;
   onIndexChange: (index: number) => void;
 }
 
-const CardStack: React.FC<CardStackProps> = ({ mods, onApprove, onReject, isLoading, onRefresh, onQueueChange, currentIndex, onIndexChange }) => {
+const CardStack: React.FC<CardStackProps> = ({ mods, onApprove, onReject, isLoading, onQueueChange, currentIndex, onIndexChange }) => {
   const [isAnimating, setIsAnimating] = useState(false);
   const [exitDirection, setExitDirection] = useState<'left' | 'right' | null>(null);
   
@@ -36,35 +35,6 @@ const CardStack: React.FC<CardStackProps> = ({ mods, onApprove, onReject, isLoad
     onQueueChange?.(remaining);
   }, [currentIndex, mods.length, onQueueChange]);
 
-  // Keyboard controls
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (isLoading || isAnimating || currentIndex >= mods.length) return;
-      
-      if (e.key.toLowerCase() === 'a' || e.key === 'ArrowLeft') {
-        triggerSwipe('left');
-      } else if (e.key.toLowerCase() === 'd' || e.key === 'ArrowRight') {
-        triggerSwipe('right');
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [currentIndex, mods, isLoading, isAnimating]);
-
-  // Trigger a swipe animation (for keyboard/button use)
-  const triggerSwipe = useCallback((direction: 'left' | 'right') => {
-    if (isAnimating || currentIndex >= mods.length || swipeInProgress.current) return;
-    
-    swipeInProgress.current = true;
-    setIsAnimating(true);
-    setExitDirection(direction);
-    
-    // Complete the swipe after animation
-    setTimeout(() => {
-      completeSwipe(direction);
-    }, 300);
-  }, [currentIndex, mods.length, isAnimating]);
-
   // Complete the swipe (called after animation or from drag)
   const completeSwipe = useCallback((direction: 'left' | 'right') => {
     if (currentIndex >= mods.length) return;
@@ -82,12 +52,41 @@ const CardStack: React.FC<CardStackProps> = ({ mods, onApprove, onReject, isLoad
     swipeInProgress.current = false;
   }, [currentIndex, mods, onReject, onApprove, onIndexChange]);
 
+  // Trigger a swipe animation (for keyboard/button use)
+  const triggerSwipe = useCallback((direction: 'left' | 'right') => {
+    if (isAnimating || currentIndex >= mods.length || swipeInProgress.current) return;
+    
+    swipeInProgress.current = true;
+    setIsAnimating(true);
+    setExitDirection(direction);
+    
+    // Complete the swipe after animation
+    setTimeout(() => {
+      completeSwipe(direction);
+    }, 300);
+  }, [currentIndex, mods.length, isAnimating, completeSwipe]);
+
   // Handle swipe from drag gesture (animation already handled in ModCard)
   const handleSwipe = useCallback((direction: 'left' | 'right') => {
     if (swipeInProgress.current) return;
     swipeInProgress.current = true;
     completeSwipe(direction);
   }, [completeSwipe]);
+
+  // Keyboard controls
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (isLoading || isAnimating || currentIndex >= mods.length) return;
+      
+      if (e.key.toLowerCase() === 'a' || e.key === 'ArrowLeft') {
+        triggerSwipe('left');
+      } else if (e.key.toLowerCase() === 'd' || e.key === 'ArrowRight') {
+        triggerSwipe('right');
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [currentIndex, mods, isLoading, isAnimating, triggerSwipe]);
 
   if (isLoading) {
     return (

@@ -360,6 +360,7 @@ const App: React.FC = () => {
             {/* Settings Button */}
             <div className="relative" ref={settingsRef}>
               <button 
+                type="button"
                 onClick={() => setShowSettings(!showSettings)}
                 className={`bg-black/50 border p-2 transition-colors ${showSettings ? 'border-cp-cyan text-cp-cyan' : 'border-gray-600 text-gray-400 hover:border-cp-cyan hover:text-cp-cyan'}`}
               >
@@ -371,6 +372,7 @@ const App: React.FC = () => {
                 <div className="absolute right-0 top-12 bg-black/95 border border-cp-gray p-4 min-w-[200px] z-50">
                   <h3 className="text-cp-yellow font-bold text-sm mb-3 uppercase tracking-wider">Settings</h3>
                   <button
+                    type="button"
                     onClick={() => setShowResetConfirm(true)}
                     className="w-full flex items-center gap-2 p-2 text-left text-gray-300 hover:text-cp-red hover:bg-cp-red/10 transition-colors"
                   >
@@ -386,6 +388,7 @@ const App: React.FC = () => {
 
             {/* Approved List Button */}
             <button 
+              type="button"
               onClick={() => setView(view === 'list' ? 'swiping' : 'list')}
               className="bg-black/50 border border-cp-yellow p-2 hover:bg-cp-yellow hover:text-black transition-colors"
             >
@@ -401,6 +404,7 @@ const App: React.FC = () => {
 
             {/* Logout Button */}
              <button 
+              type="button"
               onClick={() => {
                 setApiKey(null);
                 setView('landing');
@@ -459,7 +463,6 @@ const App: React.FC = () => {
                 onApprove={handleApprove} 
                 onReject={handleReject} 
                 isLoading={isLoading && !isBulkLoading}
-                onRefresh={(forceRefresh) => apiKey && loadModsBulk(apiKey, selectedGame, !forceRefresh)}
                 onQueueChange={setQueueRemaining}
                 currentIndex={currentModIndex}
                 onIndexChange={setCurrentModIndex}
@@ -518,6 +521,7 @@ const App: React.FC = () => {
                           <Download size={24} />
                         </a>
                         <button
+                          type="button"
                           onClick={() => handleRemoveApproved(mod.mod_id)}
                           className="p-2 text-gray-500 hover:text-cp-red transition-colors"
                           title="Remove from list"
@@ -554,6 +558,7 @@ const App: React.FC = () => {
             </p>
             <div className="flex gap-3">
               <button
+                type="button"
                 onClick={() => {
                   setShowResetConfirm(false);
                 }}
@@ -562,6 +567,7 @@ const App: React.FC = () => {
                 Cancel
               </button>
               <button
+                type="button"
                 onClick={handleResetProgress}
                 className="flex-1 px-4 py-2 bg-cp-red border border-cp-red text-white hover:bg-cp-red/80 transition-colors"
               >
