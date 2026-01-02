@@ -1,3 +1,5 @@
+Disclaimer: Readme is outdated, but the general functionality is the same. Will update later.
+
 # Seamless Mod Swiper
 
 Tinder'esque Application to Help Catalogue Your Mod List.
